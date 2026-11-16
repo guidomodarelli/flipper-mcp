@@ -91,7 +91,9 @@ export class UiStore {
     const params = message.params as Record<string, unknown>;
     switch (message.method) {
       case 'init':
+        // A (re)connected plugin restarts its txId counter and resends a full frame.
         ui.initRootId = params.rootId as Id;
+        ui.frame = undefined;
         break;
       case 'metadataUpdate': {
         const metadata = (params.attributeMetadata ?? {}) as Record<string, Metadata>;

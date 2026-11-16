@@ -51,6 +51,8 @@ export interface BridgeEvents {
   'plugin-message': [PluginMessage];
   'device-log': [{serial: string; entry: DeviceLogEntry}];
   'device-crash': [{serial: string; crash: {reason?: string; callstack?: string; name?: string; date?: unknown}}];
+  /** A new app session (first connection or reconnection after a disconnect). */
+  'client-connected': [ClientState];
   'client-ready': [ClientState];
   'client-disconnected': [ClientState];
   lifecycle: [{kind: string; detail: Record<string, unknown>}];
@@ -175,7 +177,8 @@ export class FlipperBridge extends EventEmitter<BridgeEvents> {
   private onClientConnected(description: ClientDescription): Promise<void> {
     const {query} = description;
     const previous = this.clients.get(description.id);
-    const state: ClientState = {
+    const wasConnected = previous?.connected ?? false;
+    const fields: ClientState = {
       id: description.id,
       app: query.app,
       appId: query.app_id,
@@ -184,14 +187,19 @@ export class FlipperBridge extends EventEmitter<BridgeEvents> {
       deviceId: query.device_id,
       sdkVersion: query.sdk_version,
       connected: true,
-      connectedAt: previous?.connected ? previous.connectedAt : Date.now(),
+      connectedAt: wasConnected ? previous!.connectedAt : Date.now(),
       plugins: previous?.plugins ?? [],
       backgroundPlugins: previous?.backgroundPlugins ?? [],
-      ready: false,
+      ready: wasConnected ? previous!.ready : false,
     };
+    // Update the stored object in place: a running handshake holds a reference to it.
+    const state = previous ? Object.assign(previous, fields) : fields;
     this.clients.set(description.id, state);
-    if (!previous?.connected) this.lifecycle('client-connected', {id: description.id});
-    return this.handshake(state);
+    if (!wasConnected) {
+      this.lifecycle('client-connected', {id: description.id});
+      this.emit('client-connected', state);
+    }
+    return state.ready ? Promise.resolve() : this.handshake(state);
   }
 
   /** getPlugins → getBackgroundPlugins → init(autoInitPlugins). Deduplicated per client. */

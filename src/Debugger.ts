@@ -63,6 +63,8 @@ export class Debugger {
       this.prefs.handle(message);
       this.flux.handle(message);
     });
+    // A new app session restarts the ui-debugger counters; drop the old screen.
+    this.bridge.on('client-connected', (client) => this.ui.forget(client.id));
     this.bridge.on('device-log', ({serial, entry}) => this.logs.add(serial, entry));
     this.bridge.on('device-crash', ({serial, crash}) => this.logs.addCrash(serial, crash));
   }
@@ -231,7 +233,7 @@ export class Debugger {
           const regex = logRegex!;
           const tag = textMatcher(condition.tag);
           const onLog = (entry: import('./stores/LogStore.js').LogEntry) => {
-            if (regex.test(entry.message) && (!tag || tag(entry.tag))) {
+            if (regex.test(entry.message) && (!tag || tag(entry.tag)) && (!client || entry.serial === client.deviceId)) {
               finish({
                 matched: true,
                 waitedMs: elapsed(),

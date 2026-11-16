@@ -34,7 +34,9 @@ export function textMatcher(pattern: string | undefined): ((value: string | unde
   if (regex) {
     let compiled: RegExp;
     try {
-      compiled = new RegExp(regex[1]!, regex[2]!.includes('i') ? regex[2] : `${regex[2]}i`);
+      // g/y make RegExp.test stateful (lastIndex), which would skip matches.
+      const flags = regex[2]!.replace(/[gy]/g, '');
+      compiled = new RegExp(regex[1]!, flags.includes('i') ? flags : `${flags}i`);
     } catch (error) {
       throw new Error(`Invalid regex ${pattern}: ${(error as Error).message}`);
     }
@@ -47,7 +49,7 @@ export function textMatcher(pattern: string | undefined): ((value: string | unde
 /** Compiles a user regex (always case-insensitive unless flags say otherwise). */
 export function compileRegex(pattern: string, flags = 'i'): RegExp {
   try {
-    return new RegExp(pattern, flags);
+    return new RegExp(pattern, flags.replace(/[gy]/g, ''));
   } catch (error) {
     throw new Error(`Invalid regex "${pattern}": ${(error as Error).message}`);
   }

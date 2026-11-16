@@ -42,6 +42,12 @@ describe('textMatcher', () => {
     expect(match('/users/me')).toBe(false);
   });
 
+  it('ignores stateful g/y flags so repeated values keep matching', () => {
+    const match = textMatcher('/users/g')!;
+
+    expect([match('/users'), match('/users'), match('/users')]).toEqual([true, true, true]);
+  });
+
   it('reports invalid regexes', () => {
     expect(() => textMatcher('/(/')).toThrow('Invalid regex');
   });

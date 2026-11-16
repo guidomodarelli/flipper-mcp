@@ -29,6 +29,8 @@ interface ResponseInfo {
 
 export interface NetworkEntry extends Stamped {
   clientId: string;
+  /** Advances on every update (request, then response); `afterId` cursors compare against it. */
+  rev: number;
   /** Id assigned by the Network plugin on the device. */
   requestId: string;
   method: string;
@@ -82,7 +84,10 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     sequence: Sequence,
   ) {
     super();
-    this.buffer = new RingBuffer<NetworkEntry>(config.buffers.network, sequence);
+    this.buffer = new RingBuffer<NetworkEntry>(config.buffers.network, sequence, (evicted) => {
+      const key = this.key(evicted.clientId, evicted.requestId);
+      if (this.index.get(key) === evicted.id) this.index.delete(key);
+    });
   }
 
   handle(message: PluginMessage): void {
@@ -127,8 +132,10 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
       requestBytes: decoded?.length ?? 0,
       deviceRequestTs: request.timestamp,
       traceId: headerValue(request.headers, this.config.traceHeader),
+      rev: 0,
       ...flags,
     });
+    entry.rev = entry.id;
     this.index.set(this.key(clientId, request.id), entry.id);
     this.emit('change', entry);
   }
@@ -148,6 +155,7 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
         requestHeaders: [],
         requestBytes: 0,
         deviceRequestTs: response.timestamp,
+        rev: 0,
       });
       this.index.set(this.key(clientId, response.id), entry.id);
     }
@@ -161,6 +169,7 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     entry.durationMs = entry.method === '?' ? undefined : response.timestamp - entry.deviceRequestTs;
     entry.isMock = response.isMock || undefined;
     entry.insights = response.insights ?? undefined;
+    entry.rev = this.buffer.nextSequence();
     this.emit('change', entry);
   }
 
@@ -181,6 +190,11 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     this.onResponse(clientId, partial.initial, ts, Buffer.concat(buffers).toString('base64'));
   }
 
+  /** Request ids currently indexed (bounded by the buffer capacity). */
+  get indexedRequests(): number {
+    return this.index.size;
+  }
+
   /** Requests without a response, started less than `maxAgeMs` ago. */
   pending(clientId?: string, maxAgeMs = 30_000, now = Date.now()): NetworkEntry[] {
     return this.buffer
@@ -195,16 +209,18 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     const page = this.buffer.query({
       since: parseTime(filter.since),
       until: parseTime(filter.until),
-      afterId: filter.afterId,
       limit: filter.limit ?? 50,
       predicate: (entry) =>
+        (filter.afterId === undefined || entry.rev > filter.afterId) &&
         (!filter.clientId || entry.clientId === filter.clientId) &&
         (!url || url(entry.url)) &&
         (!method || entry.method.toUpperCase() === method) &&
         (!status || status(entry.status, entry.status === undefined)) &&
         (!filter.traceId || entry.traceId === filter.traceId),
     });
-    return {...page, items: page.items.map(summarize)};
+    // The cursor is the highest revision seen, so a later response shows up again.
+    const lastRev = page.items.reduce((max, e) => Math.max(max, e.rev), 0);
+    return {...page, lastId: page.items.length ? lastRev : undefined, items: page.items.map(summarize)};
   }
 
   /** By MCP event id or by the plugin's request id. */
@@ -212,7 +228,7 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     const numeric = typeof id === 'number' ? id : /^\d+$/.test(id) ? Number(id) : undefined;
     if (numeric !== undefined) {
       const entry = this.buffer.get(numeric);
-      if (entry) return entry;
+      if (entry && (!clientId || entry.clientId === clientId)) return entry;
     }
     const requestId = String(id);
     return this.buffer.findLast((e) => e.requestId === requestId && (!clientId || e.clientId === clientId));

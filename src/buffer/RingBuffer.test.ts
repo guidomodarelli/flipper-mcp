@@ -63,6 +63,15 @@ describe('RingBuffer', () => {
     expect(buffer.findLast((e) => e.ts < 3500)?.name).toBe('e3');
   });
 
+  it('reports each evicted event', () => {
+    const evicted: string[] = [];
+    const buffer = new RingBuffer<Item>(2, new Sequence(), (item) => evicted.push(item.name));
+
+    for (const name of ['a', 'b', 'c', 'd']) buffer.push({name});
+
+    expect(evicted).toEqual(['a', 'b']);
+  });
+
   it('rejects a non-positive capacity', () => {
     expect(() => new RingBuffer<Item>(0)).toThrow('positive integer');
   });

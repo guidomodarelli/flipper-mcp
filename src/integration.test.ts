@@ -120,6 +120,15 @@ describe('connection and handshake', () => {
     expect(Math.min(...ids)).toBeGreaterThanOrEqual(REQUEST_ID_BASE);
   });
 
+  it('stays ready when client-connected arrives twice during the handshake', async () => {
+    h.fake.connectApp(fx.APP_ID);
+    h.fake.connectApp(fx.APP_ID);
+
+    await vi.waitFor(() => expect(h.dbg.bridge.clients.get(fx.APP_ID)?.ready).toBe(true), {timeout: 3000});
+    const apps = await h.call('list_apps');
+    expect(apps.apps[0]).toMatchObject({ready: true, plugins: expect.arrayContaining(['ui-debugger'])});
+  });
+
   it('re-sends init after the web UI deinits a plugin', async () => {
     await connectApp(h);
     h.app.connected.delete('ui-debugger');
@@ -327,6 +336,20 @@ describe('view hierarchy', () => {
     ]);
   });
 
+  it('shows the new screen after the app restarts with a lower txId', async () => {
+    h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'subtreeUpdate', fx.subtreeUpdate);
+    await vi.waitFor(() => expect(h.dbg.ui.hasFrame(fx.APP_ID)).toBe(true));
+    h.fake.disconnectApp(fx.APP_ID);
+    await vi.waitFor(() => expect(h.dbg.bridge.clients.get(fx.APP_ID)?.connected).toBe(false));
+    await connectApp(h);
+
+    const restarted = {...fx.subtreeUpdate, txId: 1, nodes: [{...fx.subtreeUpdate.nodes[0]!, name: 'SplashView', children: []}]};
+    h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'subtreeUpdate', restarted);
+    await vi.waitFor(() => expect(h.dbg.ui.hasFrame(fx.APP_ID)).toBe(true));
+
+    expect((await h.call('get_view_hierarchy')).root).toMatchObject({cls: 'SplashView'});
+  });
+
   it('asks to retry when no frame has arrived yet', async () => {
     const {isError, body} = await h.callRaw('get_view_hierarchy');
 
@@ -413,6 +436,18 @@ describe('wait_for', () => {
     const result = await waiting;
 
     expect(result).toMatchObject({matched: true, event: {tag: 'Auth', msg: 'login done'}});
+  });
+
+  it('ignores matching logs from other devices', async () => {
+    const waiting = h.call('wait_for', {condition: {type: 'log_match', regex: 'login done'}, timeoutMs: 2000});
+    setTimeout(() => {
+      h.fake.emitEvent('device-log', {...fx.logEntry('info', 'Auth', 'login done elsewhere'), serial: 'other-device'});
+      h.fake.emitEvent('device-log', fx.logEntry('info', 'Auth', 'login done here'));
+    }, 50);
+
+    const result = await waiting;
+
+    expect(result.event.msg).toBe('login done here');
   });
 
   it('waits for network idle until pending requests finish', async () => {

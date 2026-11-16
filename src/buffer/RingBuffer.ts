@@ -51,11 +51,18 @@ export class RingBuffer<T extends Stamped> {
   constructor(
     readonly capacity: number,
     private readonly sequence: Sequence = new Sequence(),
+    /** Called with each event dropped because the buffer was full. */
+    private readonly onEvict?: (item: T) => void,
   ) {
     if (!Number.isInteger(capacity) || capacity <= 0) {
       throw new Error(`RingBuffer capacity must be a positive integer, got ${capacity}`);
     }
     this.slots = new Array(capacity);
+  }
+
+  /** Next value of the shared id sequence (for revision cursors). */
+  nextSequence(): number {
+    return this.sequence.next();
   }
 
   get size(): number {
@@ -72,7 +79,10 @@ export class RingBuffer<T extends Stamped> {
     const stored = {...item, id: this.sequence.next(), ts: item.ts ?? Date.now()} as T;
     if (this.count === this.capacity) {
       const oldest = this.slots[this.start];
-      if (oldest) this.byId.delete(oldest.id);
+      if (oldest) {
+        this.byId.delete(oldest.id);
+        this.onEvict?.(oldest);
+      }
       this.slots[this.start] = stored;
       this.start = (this.start + 1) % this.capacity;
       this.evictedCount += 1;
