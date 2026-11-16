@@ -1,0 +1,4 @@
+{"t":1794801406032,"dir":"out","frame":{"event":"exec","payload":{"id":1,"command":"device-list","args":[]}}}
+{"t":1794801406033,"dir":"out","frame":{"event":"exec","payload":{"id":2,"command":"client-list","args":[]}}}
+{"t":1794801406041,"dir":"in","frame":{"event":"exec-response","payload":{"id":1,"data":[{"serial":"","deviceType":"physical","title":"Windows","os":"Windows","icon":"app-microsoft-windows","features":{"screenCaptureAvailable":false,"screenshotAvailable":false}}]}}}
+{"t":1794801406041,"dir":"in","frame":{"event":"exec-response","payload":{"id":2,"data":[]}}}

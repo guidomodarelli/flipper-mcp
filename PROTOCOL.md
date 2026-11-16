@@ -31,6 +31,10 @@ Marcas: **[verificado]** = probado contra un `flipper-server@0.273.0` real;
   - Si no conecta en 30 s, rechaza la promesa inicial y no hay forma de recuperar el objeto: el MCP
     descarta ese socket y abre uno nuevo.
 
+- **App ↔ server (certificados).** El server firma el CSR de la app con el `openssl` del `PATH`
+  (`openssl x509 -req …`). Con OpenSSL 3.5 falla (`X509_REQ_verify_ex:unsupported version`) y la
+  app reintenta para siempre sin aparecer en `client-list`; con OpenSSL 1.1.1w funciona. **[verificado]**
+
 ### Sobres (un JSON por frame) **[verificado]**
 
 Cliente → server:
@@ -50,14 +54,18 @@ la UI web.
 ### Comandos `exec`
 
 - `device-list` → `DeviceDescription[]` `{os, title, deviceType, serial, features, sdkVersion?}`. **[verificado]**
-- `client-list` → `ClientDescription[]` `{id, query:{app, app_id?, os, device, device_id, sdk_version, medium}}`. **[verificado]** (vacío, sin app)
-- `client-request(clientId, payload)` → `void`, fire-and-forget hacia la app. **[código]**
-- `client-request-response(clientId, payload)` → `{success, length}` | `{error:{message, stacktrace, name}, length}`. **[código]**
-- `device-shell-exec(serial, cmd)` → stdout (para `pidof <paquete>` en `get_logs onlyApp`). **[código]**
+- `client-list` → `ClientDescription[]` `{id, query:{app, app_id?, os, device, device_id, sdk_version, medium}}`. **[verificado]**
+- `client-request(clientId, payload)` → `void`, fire-and-forget hacia la app. **[verificado]**
+- `client-request-response(clientId, payload)` → `{success, length}` | `{error:{message, stacktrace, name}, length}`. **[verificado]**
+- `device-shell-exec(serial, cmd)` → stdout (para `pidof <paquete>` en `get_logs onlyApp`). **[verificado]**
 
 `clientId` = `escape(app)#os#device#device_id`, por ejemplo `MiApp#Android#Pixel_7#emulator-5554`.
 
-### Eventos `server-event` que consume el MCP **[código]**
+### Eventos `server-event` que consume el MCP
+
+**[verificado]** `device-connected`, `device-log`, `client-connected`, `client-disconnected` y
+`client-message`. **[código]** `device-disconnected`/`device-removed`, `device-crash` y
+`client-setup-error` (no se dispararon en las pruebas).
 
 - `device-connected` / `device-disconnected` / `device-removed` → `DeviceDescription`
 - `device-log` `{serial, entry:{date (ISO), type, message, pid, tid, tag, app?}}`, con
@@ -69,7 +77,7 @@ la UI web.
 - `client-setup-error` `{client, type, message}`
 - `client-message` `{id: clientId, message: string}`: `message` es **JSON serializado** (ver §2).
 
-## 2. Protocolo app ↔ desktop (dentro de `client-request*` y `client-message`) **[código]**
+## 2. Protocolo app ↔ desktop (dentro de `client-request*` y `client-message`) **[verificado]**
 
 Desktop → app:
 - `{"id":N,"method":"getPlugins"}` → `{"plugins":["Network","Databases",...]}`
@@ -102,12 +110,12 @@ App → desktop (`client-message.message`, sin `id`):
    hace el handshake él mismo: `getPlugins` → `getBackgroundPlugins` → `init` de
    `FLIPPER_AUTO_INIT_PLUGINS`.
 
-## 3. Mensajes por plugin **[código]**
+## 3. Mensajes por plugin **[verificado]** con la app de `android/sample` (SDK 0.273.0, Android 14)
 
 ### Network (`api: "Network"`, background)
 - `newRequest` `{id, timestamp, method, url, headers:[{key,value}], data: base64|null}`
 - `newResponse` `{id, timestamp, status, reason, headers, data: base64|null, isMock, insights?}`
-- `partialResponse`: un `ResponseInfo` con `totalChunks>1, index:0` y chunks
+- **[código]** `partialResponse` (la app de ejemplo no lo generó): un `ResponseInfo` con `totalChunks>1, index:0` y chunks
   `{id, totalChunks, index>0, data}`. Llegan en cualquier orden y cada chunk es base64 por separado:
   se decodifican, se concatenan los bytes y después se descomprime.
 - Body: base64 → inflar según `Content-Encoding` (`gzip`, `deflate`, `br`). Android a veces lo manda
@@ -128,6 +136,8 @@ App → desktop (`client-message.message`, sin `id`):
 - `setSharedPreference({sharedPreferencesName, preferenceName, preferenceValue})`,
   `deleteSharedPreference({sharedPreferencesName, preferenceName})`
 - Evento `sharedPreferencesChange` `{preferences: archivo, name, time, deleted, value?}`
+- `SharedPreferencesFlipperPlugin(context)` lista solo los archivos que existen al construirlo; un
+  archivo creado después no aparece. La app tiene que pasar la lista de `SharedPreferencesDescriptor`.
 
 ### Logs
 No es un plugin de la app: es el evento `device-log` del server (§1).
@@ -137,6 +147,9 @@ No es un plugin de la app: es el evento `device-log` del server (§1).
 - `metadataUpdate` `{attributeMetadata: {[metadataId]: {id, type, namespace, name, mutable}}}`
 - `subtreeUpdate` `{txId, rootId, nodes: ClientNode[], snapshot, frameworkEvents?}` y `frameScan`
   `{frameTime, nodes, snapshot?}`. Cada frame trae **todos** los nodos: reemplaza al anterior.
+  Android 0.273.0 manda `frameScan` (con `frameTime` en epoch ms), unos cientos de ms después del
+  cambio; por eso existe `wait_for view_match`. La raíz es la `Application`, después la
+  `Activity`, `PhoneWindow` y `DecorView`.
 - `ClientNode = {id, parent?, qualifiedName, name, attributes, inlineAttributes, hiddenAttributes?, children, bounds, tags, activeChild?}`
 - Del SDK de Android (`plugins/uidebugger/descriptors`):
   - `name` = `simpleName` de la clase; `qualifiedName` = nombre completo.
@@ -144,12 +157,15 @@ No es un plugin de la app: es el evento `device-log` del server (§1).
   - `inlineAttributes.id` = nombre del resource id (solo si la vista tiene id).
   - `hiddenAttributes.invisible = true` cuando `visibility != VISIBLE`.
   - `attributes` = secciones por `metadataId` del namespace (por ejemplo `TextView`) con `fields`
-    por `metadataId` del atributo (por ejemplo `text`); el nombre sale de `metadataUpdate`.
+    por `metadataId` del atributo (por ejemplo `text`); el nombre sale de `metadataUpdate`. Las
+    secciones vienen como `{fields}` **sin `type`**; los atributos sí traen `type`
+    (`{"39":{"fields":{"40":{"type":"text","value":"Logged out"}}}}`).
+  - `visibility` es un atributo `enum` de la sección `View` (`VISIBLE`/`INVISIBLE`/`GONE`).
   - Si un padre tiene `activeChild`, los demás hijos no se ven (ViewPager, fragments).
 - El Layout Inspector viejo (`api: "Inspector"`, `getRoot`/`getNodes`) no está soportado por
   `get_view_hierarchy`; se puede usar con `call_plugin_method`.
 
-## 4. FluxDispatcher (fase 2, borrador) — plugin propio
+## 4. FluxDispatcher (fase 2) — plugin propio **[verificado]**
 
 `api: "FluxDispatcher"`, `runInBackground() = true` (para no perder acciones mientras la UI web
 muestra otro plugin).
@@ -169,13 +185,18 @@ Desktop → app (`execute`):
 - `snapshot({stores?})` → `{snapshotId, stores}`
 - `restore({snapshotId})` → `{restored: string[]}`
 
-El MCP ya consume `action` (buffer + `wait_for flux_action`). Las tools de fase 2 se agregan cuando
-exista el plugin.
+Implementación: `android/flux-flipper` (`FluxDispatcherFlipperPlugin`, `FluxTrace`, `JsonDiff`).
+Los comandos corren en el main thread (`MainThreadFlipperReceiver`). `FlipperObject.getArray` nunca
+devuelve `null` (una clave ausente da un array vacío): para parámetros opcionales hay que usar
+`contains`. Tools MCP: `get_flux_actions`, `get_store_state`, `set_store_state`, `dispatch_action`,
+`snapshot_stores`, `restore_stores`.
 
-## 5. A capturar en vivo
+## 5. Capturas en vivo
 
-`flipper-mcp --record <archivo.jsonl>` guarda cada frame WS crudo (`{t, dir, frame}`). Lo que hay que
-capturar con la app real y dejar en `fixtures/recordings/` (los tests de replay lo toman solos):
+`flipper-mcp --record <archivo.jsonl>` guarda cada frame WS crudo (`{t, dir, frame}`).
+`fixtures/recordings/live-sample-app.jsonl` es una sesión real con la app de ejemplo (handshake,
+Network con gzip, ui-debugger, Databases, Preferences, FluxDispatcher y logcat). Con tu app conviene
+grabar lo mismo y dejarlo en `fixtures/recordings/` (los tests de replay lo toman solos):
 
 - Un handshake completo: `getPlugins`/`getBackgroundPlugins` con sus respuestas.
 - Mensajes reales de Network (incluyendo bodies gzip y, si aparecen, `partialResponse`).
