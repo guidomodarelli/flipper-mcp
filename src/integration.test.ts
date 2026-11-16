@@ -409,6 +409,22 @@ describe('databases and preferences', () => {
     expect(changes.items).toEqual([expect.objectContaining({file: 'session_prefs', key: 'token', value: 'def'})]);
   });
 
+  it('dispatches an action and returns its diff, and cleans up when the dispatch fails', async () => {
+    h.app.handlers['FluxDispatcher.dispatchAction'] = ({type}: {type: string}) => {
+      if (type === 'BOOM') throw new Error('no such action');
+      setTimeout(() => h.fake.pushFromApp(fx.APP_ID, 'FluxDispatcher', 'action', fx.fluxAction(type, 'trace-9')), 20);
+      return {traceId: 'trace-9'};
+    };
+    const listenersBefore = h.dbg.flux.listenerCount('action');
+
+    const ok = await h.call('dispatch_action', {type: 'LOGIN_REQUESTED', waitMs: 1000});
+    const failed = await h.callRaw('dispatch_action', {type: 'BOOM', waitMs: 1000});
+
+    expect(ok).toMatchObject({traceId: 'trace-9', action: {type: 'LOGIN_REQUESTED', stores: ['SessionStore']}});
+    expect(failed.isError).toBe(true);
+    expect(h.dbg.flux.listenerCount('action')).toBe(listenersBefore);
+  });
+
   it('forwards any plugin method through call_plugin_method', async () => {
     const reply = await h.call('call_plugin_method', {plugin: 'FluxDispatcher', method: 'getStores'});
 

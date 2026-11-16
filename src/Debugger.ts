@@ -237,11 +237,17 @@ export class Debugger {
     const client = this.resolveClient(app);
     this.requireFluxPlugin(client);
     const pending = waitMs > 0 ? this.nextFluxAction(client.id, type, waitMs) : undefined;
-    const {traceId} = await this.callPlugin<{traceId: string}>(client.id, FLUX_PLUGIN, 'dispatchAction', {type, payload});
-    if (!pending) return {traceId};
-    const matching = (a: FluxAction) => a.traceId === traceId && a.type === type;
-    const action = this.flux.buffer.findLast(matching) ?? (await pending.wait(matching));
-    pending.cancel();
+    let traceId: string;
+    let action: FluxAction | undefined;
+    try {
+      ({traceId} = await this.callPlugin<{traceId: string}>(client.id, FLUX_PLUGIN, 'dispatchAction', {type, payload}));
+      if (!pending) return {traceId};
+      const matching = (a: FluxAction) => a.traceId === traceId && a.type === type;
+      action = this.flux.buffer.findLast(matching) ?? (await pending.wait(matching));
+    } finally {
+      // Also on a failed dispatch: the listener would otherwise keep every later action.
+      pending?.cancel();
+    }
     // Requests started by the action reach Flipper a moment after the action itself.
     if (action) await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 300)));
     return {
@@ -258,7 +264,10 @@ export class Debugger {
       if (a.clientId === clientId && a.type === type) seen.push(a);
     };
     this.flux.on('action', onAction);
-    const cancel = () => this.flux.off('action', onAction);
+    const cancel = () => {
+      this.flux.off('action', onAction);
+      seen.length = 0;
+    };
     const wait = (match: (a: FluxAction) => boolean) =>
       new Promise<FluxAction | undefined>((resolve) => {
         const started = Date.now();

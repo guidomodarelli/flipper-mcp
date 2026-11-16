@@ -9,6 +9,15 @@ import android.widget.TextView
 
 /** The View layer: renders store state and turns clicks into actions. */
 class MainActivity : Activity() {
+    private val subscriptions = mutableListOf<() -> Unit>()
+
+    override fun onDestroy() {
+        // Stores outlive the activity (rotation): drop listeners that hold the old views.
+        subscriptions.forEach { it() }
+        subscriptions.clear()
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -17,8 +26,8 @@ class MainActivity : Activity() {
         val session = findViewById<TextView>(R.id.session_text)
         val progress = findViewById<ProgressBar>(R.id.progress)
 
-        app.counterStore.subscribe { counter.text = "Count: ${it.count}" }
-        app.sessionStore.subscribe {
+        subscriptions += app.counterStore.subscribe { counter.text = "Count: ${it.count}" }
+        subscriptions += app.sessionStore.subscribe {
             progress.visibility = if (it.status == "loading") View.VISIBLE else View.GONE
             session.text = when (it.status) {
                 "logged_in" -> "Hola ${it.user}"

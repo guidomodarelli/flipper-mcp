@@ -12,9 +12,11 @@ abstract class Store<S : Any>(val name: String, initial: S) {
         private set
     private val listeners = mutableListOf<(S) -> Unit>()
 
-    fun subscribe(listener: (S) -> Unit) {
+    /** Returns the call that removes the listener; views call it when they are destroyed. */
+    fun subscribe(listener: (S) -> Unit): () -> Unit {
         listeners += listener
         listener(state)
+        return { listeners -= listener }
     }
 
     /** Used by reduce and by debug tooling (set_store_state / restore). */
