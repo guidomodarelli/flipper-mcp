@@ -349,10 +349,12 @@ export class Debugger {
         case 'view_match': {
           // ui-debugger pushes frames a few hundred ms after a change; poll the latest one.
           const poll = setInterval(() => {
-            if (!clientId) return;
+            // Without `app`, re-resolve on every poll: the only app may connect during the wait.
+            const target = clientId ?? this.optionalClient()?.id;
+            if (!target) return;
             let found: {nodes?: unknown[]} | undefined;
             try {
-              found = this.ui.hierarchy(clientId, {filter: condition.filter, maxNodes: 5}) as typeof found;
+              found = this.ui.hierarchy(target, {filter: condition.filter, maxNodes: 5}) as typeof found;
             } catch {
               found = undefined; // frame without a root yet
             }

@@ -42,7 +42,8 @@ const limit = (def: number, max: number) =>
 
 /** Resolves an RFC 6901 JSON pointer. */
 export function pointer(value: unknown, path: string): unknown {
-  if (path === '' || path === '/') return value;
+  // Only the empty pointer is the root; "/" is the property named "".
+  if (path === '') return value;
   if (!path.startsWith('/')) throw new ActionableError(`path must be a JSON pointer starting with "/", got "${path}".`);
   let current: unknown = value;
   for (const raw of path.slice(1).split('/')) {

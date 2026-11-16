@@ -507,6 +507,17 @@ describe('wait_for', () => {
     expect(result).toMatchObject({matched: true, event: {resId: 'login_button', text: 'Ingresar'}});
   });
 
+  it('matches a view of an app that connects after the wait started', async () => {
+    h.fake.disconnectApp(fx.APP_ID);
+    await vi.waitFor(() => expect(h.dbg.bridge.clients.get(fx.APP_ID)?.connected).toBe(false));
+    const waiting = h.call('wait_for', {condition: {type: 'view_match', filter: 'Ingresar'}, timeoutMs: 3000});
+    await connectApp(h);
+    h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'metadataUpdate', fx.uiMetadata);
+    h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'subtreeUpdate', fx.subtreeUpdate);
+
+    expect(await waiting).toMatchObject({matched: true, event: {resId: 'login_button'}});
+  });
+
   it('waits for a specific request to complete', async () => {
     const waiting = h.call('wait_for', {condition: {type: 'network_request', url: '/login'}, timeoutMs: 2000});
     setTimeout(() => {
