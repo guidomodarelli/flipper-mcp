@@ -22,7 +22,12 @@ afterEach(async () => {
   cleanup = undefined;
 });
 
-describe.skipIf(files.length === 0).each(files)('recording %s', (file) => {
+it('ships at least the recording captured from a real flipper-server', () => {
+  // Guards against the fixtures being ignored or dropped from the repo.
+  expect(files).toContain('real-flipper-server-0.273.0-no-device.jsonl');
+});
+
+describe.each(files)('recording %s', (file) => {
   const frames = readRecording(path.join(DIR, file));
 
   it('only contains the envelopes documented in PROTOCOL.md', () => {
