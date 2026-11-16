@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+recordings/
+*.log
+.codex-autofix/
