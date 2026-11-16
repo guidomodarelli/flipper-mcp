@@ -1,0 +1,47 @@
+{
+  "name": "flipper-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets AI agents debug Android apps through a running flipper-server.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Guido Modarelli",
+  "bin": {
+    "flipper-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "PROTOCOL.md"
+  ],
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/index.js",
+    "prepare": "tsc -p tsconfig.build.json",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "flipper-common": "0.273.0",
+    "flipper-server-client": "0.273.0",
+    "reconnecting-websocket": "4.4.0",
+    "ws": "8.23.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "packageManager": "pnpm@12.11.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guidomodarelli/flipper-mcp.git"
+  }
+}
