@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: pnpm/setup@v2.1.0
+        with:
+          cache: true
+          require-lockfile: true
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  # The server supports Node >= 18, but vitest and pnpm need a newer Node.
+  # Install and build with .nvmrc, then run the built server on Node 18
+  # through a real MCP client (no flipper-server: it must report "disconnected").
+  node18-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: pnpm/setup@v2.1.0
+        with:
+          require-lockfile: true
+      - run: pnpm build
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 18
+          package-manager-cache: false
+      - name: Smoke test on Node 18
+        run: |
+          node --version
+          node scripts/smoke.mjs | tee smoke.log
+          grep -q '"state":"disconnected"' smoke.log
