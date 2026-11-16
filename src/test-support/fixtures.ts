@@ -72,7 +72,11 @@ export function logEntry(type: string, tag: string, message: string, pid = 4242)
   };
 }
 
-/** ui-debugger metadata ids → attribute names (MetadataRegister on Android). */
+/**
+ * ui-debugger metadata ids → attribute names (MetadataRegister on Android).
+ * Shapes match a real capture (fixtures/recordings/live-sample-app.jsonl):
+ * namespace sections are `{fields}` without `type`.
+ */
 export const uiMetadata = {
   attributeMetadata: {
     '1': {id: 1, type: 'attribute', namespace: 'View', name: 'View'},
@@ -106,18 +110,22 @@ export const subtreeUpdate = {
   snapshot: null,
   nodes: [
     node(1, 'DecorView', [0, 0, 1080, 2400], [2]),
-    node(2, 'LinearLayout', [0, 100, 1080, 2300], [3, 4, 5], {parent: 1, inlineAttributes: {id: 'content'}}),
+    node(2, 'LinearLayout', [0, 100, 1080, 2300], [3, 4, 5, 6], {parent: 1, inlineAttributes: {id: 'content'}}),
     node(3, 'TextView', [40, 20, 600, 80], [], {
       parent: 2,
       inlineAttributes: {id: 'title'},
-      attributes: {'10': {type: 'object', fields: {'11': {type: 'text', value: 'Hola Flux'}}}},
+      attributes: {'10': {fields: {'11': {type: 'text', value: 'Hola Flux'}}}},
     }),
     node(4, 'Button', [40, 200, 300, 120], [], {
       parent: 2,
       inlineAttributes: {id: 'login_button'},
-      attributes: {'10': {type: 'object', fields: {'11': {type: 'text', value: 'Ingresar'}}}},
+      attributes: {'10': {fields: {'11': {type: 'text', value: 'Ingresar'}}}},
     }),
     node(5, 'ProgressBar', [40, 400, 100, 100], [], {parent: 2, hiddenAttributes: {invisible: true}}),
+    node(6, 'TextView', [40, 500, 100, 50], [], {
+      parent: 2,
+      attributes: {'1': {fields: {'2': {type: 'enum', value: 'GONE'}}}},
+    }),
   ],
 };
 

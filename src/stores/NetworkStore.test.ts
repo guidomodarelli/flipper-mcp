@@ -37,6 +37,26 @@ describe('NetworkStore', () => {
     expect(network.find(id, APP_A)?.requestId).toBe('r1');
   });
 
+  it('keeps interrupted chunked responses bounded by the buffer capacity', () => {
+    const network = store(2);
+
+    for (let i = 0; i < 100; i++) {
+      network.handle(message(APP_A, 'newRequest', fx.newRequest(`p${i}`, 'https://api.dev/x')));
+      network.handle(message(APP_A, 'partialResponse', fx.partialResponses(`p${i}`, 200, 'abcdef', 2)[0]));
+    }
+
+    expect(network.pendingAssemblies).toBeLessThanOrEqual(2);
+  });
+
+  it('drops half-assembled responses when the app session ends', () => {
+    const network = store();
+    network.handle(message(APP_A, 'partialResponse', fx.partialResponses('p1', 200, 'abcdef', 2)[0]));
+
+    network.forgetPartials(APP_A);
+
+    expect(network.pendingAssemblies).toBe(0);
+  });
+
   it('keeps the request index bounded by the buffer capacity', () => {
     const network = store(2);
 

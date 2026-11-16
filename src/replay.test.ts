@@ -67,9 +67,15 @@ describe.each(files)('recording %s', (file) => {
     const deviceLogs = events.filter((e) => e.event === 'device-log').length;
     await vi.waitFor(() => expect(dbg.logs.buffer.size - logsBefore).toBe(Math.min(deviceLogs, dbg.logs.buffer.capacity)));
     if (apis.has('Network.newRequest')) expect(dbg.network.buffer.size).toBeGreaterThan(0);
-    if ([...apis].some((a) => a.startsWith('ui-debugger.subtreeUpdate'))) {
+    if (apis.has('FluxDispatcher.action')) {
+      await vi.waitFor(() => expect(dbg.flux.buffer.size).toBe(messages.filter((m) => m.params?.method === 'action').length));
+    }
+    if (apis.has('ui-debugger.subtreeUpdate') || apis.has('ui-debugger.frameScan')) {
       const clientId = messages.find((m) => m.params?.api === 'ui-debugger')!.id;
-      expect(dbg.ui.hasFrame(clientId)).toBe(true);
+      await vi.waitFor(() => expect(dbg.ui.hasFrame(clientId)).toBe(true));
+      // Real frames carry text inside namespace sections; at least one node must expose it.
+      const tree = JSON.stringify(dbg.ui.hierarchy(clientId, {maxDepth: 50, maxNodes: 5000}));
+      if (apis.has('ui-debugger.metadataUpdate')) expect(tree).toContain('"text":');
     }
   });
 });

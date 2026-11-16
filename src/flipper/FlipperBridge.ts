@@ -10,6 +10,15 @@ import type {FlipperConnection, SubscribedEvent} from './FlipperConnection.js';
  */
 export const REQUEST_ID_BASE = 2 ** 40;
 
+/**
+ * Each MCP process takes its own block of 2^32 ids above REQUEST_ID_BASE, so
+ * two MCPs (e.g. Claude Code and Cursor) on the same app do not collide either.
+ * Stays below 2^53 (safe integers) and int64 on the SDK side.
+ */
+export function randomRequestIdStart(random = Math.random): number {
+  return REQUEST_ID_BASE + Math.floor(random() * 2 ** 20) * 2 ** 32;
+}
+
 export interface PluginMessage {
   clientId: string;
   api: string;
@@ -67,7 +76,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export class FlipperBridge extends EventEmitter<BridgeEvents> {
   readonly devices = new Map<string, DeviceDescription & {connected: boolean}>();
   readonly clients = new Map<string, ClientState>();
-  private nextRequestId = REQUEST_ID_BASE;
+  private nextRequestId = randomRequestIdStart();
   private reinitTimer?: NodeJS.Timeout;
   private readonly handshakes = new Map<string, Promise<void>>();
 

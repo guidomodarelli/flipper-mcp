@@ -139,6 +139,7 @@ export class UiStore {
       throw new Error(`Node ${String(rootId)} is not in the latest frame.`);
     }
     const origin = this.absoluteOrigin(frame, rootId);
+    const rootHidden = this.hiddenByAncestors(ui, frame, rootId);
     let emitted = 0;
 
     if (match) {
@@ -155,7 +156,7 @@ export class UiStore {
           walk(child.id, pruned.b[0], pruned.b[1], [...path, node.name], pruned.visible === false || child.inactive);
         }
       };
-      walk(rootId, origin.x, origin.y, [], false);
+      walk(rootId, origin.x, origin.y, [], rootHidden);
       return {
         txId: frame.txId,
         frameAgeMs: Date.now() - frame.receivedAt,
@@ -187,12 +188,13 @@ export class UiStore {
       return compact({...pruned, children: built, more: skipped || undefined}) as PrunedNode;
     };
 
+    const root = build(rootId, origin.x, origin.y, 0, rootHidden);
     return {
       txId: frame.txId,
       frameAgeMs: Date.now() - frame.receivedAt,
       nodeCount: frame.nodes.size,
       emitted,
-      root: build(rootId, origin.x, origin.y, 0, false),
+      root,
       ...(emitted >= maxNodes ? {truncated: true, hint: 'maxNodes reached; use filter or rootId to narrow'} : {}),
     };
   }
@@ -203,6 +205,23 @@ export class UiStore {
       if (node.parent === undefined || !frame.nodes.has(node.parent)) return node.id;
     }
     return undefined;
+  }
+
+  /** True when an ancestor of `id` is hidden or `id` sits in an inactive `activeChild` branch. */
+  private hiddenByAncestors(ui: ClientUi, frame: Frame, id: Id): boolean {
+    let childId = id;
+    let current = frame.nodes.get(id)?.parent;
+    const seen = new Set<Id>();
+    while (current !== undefined && !seen.has(current)) {
+      seen.add(current);
+      const node = frame.nodes.get(current);
+      if (!node) break;
+      if (node.activeChild !== undefined && node.activeChild !== childId) return true;
+      if (this.prune(ui, node, 0, 0, false).visible === false) return true;
+      childId = current;
+      current = node.parent;
+    }
+    return false;
   }
 
   /** Bounds are relative to the parent; add up the ancestors of `id`. */
@@ -230,10 +249,11 @@ export class UiStore {
   }
 
   private prune(ui: ClientUi, node: ClientNode, ox: number, oy: number, ancestorHidden: boolean): PrunedNode {
-    const {text, desc} = this.readAttributes(ui, node.attributes);
+    const {text, desc, hidden: notVisible} = this.readAttributes(ui, node.attributes);
     const bounds = node.bounds ?? {x: 0, y: 0, width: 0, height: 0};
     const hidden =
       ancestorHidden ||
+      notVisible === true ||
       node.hiddenAttributes?.invisible === true ||
       bounds.width <= 0 ||
       bounds.height <= 0;
@@ -249,18 +269,20 @@ export class UiStore {
   }
 
   private readAttributes(ui: ClientUi, attributes: Record<string, Inspectable> | undefined) {
-    const found: {text?: string; desc?: string} = {};
+    const found: {text?: string; desc?: string; hidden?: boolean} = {};
     const visit = (fields: Record<string, Inspectable> | undefined, depth: number) => {
       if (!fields || depth > 3) return;
       for (const [metadataId, value] of Object.entries(fields)) {
         const name = ui.metadata.get(metadataId)?.name?.toLowerCase();
-        if (value?.type === 'object') {
+        // Namespace sections (e.g. TextView) arrive as {fields} without a type.
+        if (value?.fields) {
           visit(value.fields, depth + 1);
           continue;
         }
         if (!name || typeof value?.value !== 'string' || value.value === '') continue;
         if (TEXT_ATTRS.has(name)) found.text ??= value.value;
         else if (DESC_ATTRS.has(name)) found.desc ??= value.value;
+        else if (name === 'visibility' && value.value !== 'VISIBLE') found.hidden = true;
       }
     };
     visit(attributes, 0);

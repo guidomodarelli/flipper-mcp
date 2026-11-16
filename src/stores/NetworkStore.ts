@@ -87,6 +87,7 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     this.buffer = new RingBuffer<NetworkEntry>(config.buffers.network, sequence, (evicted) => {
       const key = this.key(evicted.clientId, evicted.requestId);
       if (this.index.get(key) === evicted.id) this.index.delete(key);
+      this.partials.delete(key);
     });
   }
 
@@ -178,7 +179,11 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     if (!chunk?.id) return;
     const key = this.key(clientId, chunk.id);
     const partial: PartialResponse = this.partials.get(key) ?? {chunks: new Map()};
-    this.partials.set(key, partial);
+    if (!this.partials.has(key)) {
+      // Interrupted responses never complete: keep at most one assembly per buffered request.
+      while (this.partials.size >= this.buffer.capacity) this.partials.delete(this.partials.keys().next().value!);
+      this.partials.set(key, partial);
+    }
     const index = chunk.index ?? 0;
     if (index === 0) partial.initial = chunk;
     partial.chunks.set(index, chunk.data ?? '');
@@ -188,6 +193,15 @@ export class NetworkStore extends EventEmitter<{change: [NetworkEntry]}> {
     for (let i = 0; i < total; i++) buffers.push(Buffer.from(partial.chunks.get(i) ?? '', 'base64'));
     this.partials.delete(key);
     this.onResponse(clientId, partial.initial, ts, Buffer.concat(buffers).toString('base64'));
+  }
+
+  /** Drops half-assembled responses of an app whose session ended. */
+  forgetPartials(clientId: string): void {
+    for (const key of this.partials.keys()) if (key.startsWith(`${clientId}|`)) this.partials.delete(key);
+  }
+
+  get pendingAssemblies(): number {
+    return this.partials.size;
   }
 
   /** Request ids currently indexed (bounded by the buffer capacity). */
