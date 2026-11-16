@@ -40,6 +40,21 @@ const afterId = z
 const limit = (def: number, max: number) =>
   z.number().int().min(1).max(max).optional().describe(`Max events (newest kept). Default ${def}.`);
 
+/** Resolves an RFC 6901 JSON pointer. */
+export function pointer(value: unknown, path: string): unknown {
+  if (path === '' || path === '/') return value;
+  if (!path.startsWith('/')) throw new ActionableError(`path must be a JSON pointer starting with "/", got "${path}".`);
+  let current: unknown = value;
+  for (const raw of path.slice(1).split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (current === null || typeof current !== 'object' || !(key in (current as object))) {
+      throw new ActionableError(`Nothing at ${path} in the store state (missing "${key}").`);
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
 type DbValue = {type: string; value: unknown};
 const flatten = (value: unknown) =>
   value && typeof value === 'object' && 'type' in value ? (value as DbValue).value : value;
@@ -292,7 +307,7 @@ export function registerTools(server: McpServer, dbg: Debugger): void {
     {
       title: 'Wait for a condition',
       description:
-        'Blocks until a condition happens after the call, or the timeout. Returns {matched, waitedMs, event?, hint?}. Conditions: network_idle (no pending requests and no traffic for idleMs), network_request (a response for a matching URL), log_match (regex on new log messages), flux_action (new Flux action whose type matches).',
+        'Blocks until a condition happens after the call, or the timeout. Returns {matched, waitedMs, event?, hint?}. Conditions: network_idle (no pending requests and no traffic for idleMs), network_request (a response for a matching URL), log_match (regex on new log messages), flux_action (new Flux action whose type matches), view_match (a visible view matching filter in the latest UI frame).',
       inputSchema: {
         app,
         condition: z.discriminatedUnion('type', [
@@ -312,6 +327,10 @@ export function registerTools(server: McpServer, dbg: Debugger): void {
             tag: z.string().optional(),
           }),
           z.object({
+            type: z.literal('view_match'),
+            filter: z.string().describe('Same as get_view_hierarchy filter: substring or /regex/ on class, resId, text, desc.'),
+          }),
+          z.object({
             type: z.literal('flux_action'),
             actionType: z.string().describe('Substring or /regex/ on the action type.'),
           }),
@@ -321,6 +340,105 @@ export function registerTools(server: McpServer, dbg: Debugger): void {
       annotations: {readOnlyHint: true},
     },
     (args) => run(() => dbg.waitFor(args.condition, args.timeoutMs ?? 10_000, args.app)),
+  );
+
+  // ---- Phase 2: FluxDispatcher plugin ----
+
+  server.registerTool(
+    'get_flux_actions',
+    {
+      title: 'Query Flux actions',
+      description:
+        'Flux actions dispatched in the app since the MCP started, with the stores each one changed and their diffs (JSON-Patch ops). Requires the FluxDispatcher plugin.',
+      inputSchema: {
+        app,
+        type: z.string().optional().describe('Substring or /regex/ on the action type.'),
+        store: z.string().optional().describe('Only actions that changed this store.'),
+        traceId: z.string().optional(),
+        includePayload: z.boolean().optional().describe('Default false.'),
+        includeDiff: z.boolean().optional().describe('Default true.'),
+        since,
+        until,
+        afterId,
+        limit: limit(50, 500),
+      },
+      annotations: {readOnlyHint: true},
+    },
+    (args) =>
+      run(() => {
+        const client = dbg.optionalClient(args.app);
+        return dbg.flux.query({...args, clientId: args.app ? client?.id : undefined});
+      }),
+  );
+
+  server.registerTool(
+    'get_store_state',
+    {
+      title: 'Get Flux store state',
+      description: 'Current state of a Flux store, optionally only the subtree at a JSON pointer. Without store, lists the stores.',
+      inputSchema: {
+        app,
+        store: z.string().optional(),
+        path: z.string().optional().describe('JSON pointer inside the state, e.g. "/user/email".'),
+      },
+      annotations: {readOnlyHint: true},
+    },
+    (args) =>
+      run(async () => {
+        if (!args.store) return dbg.fluxCall<{stores: string[]}>(args.app, 'getStores');
+        const {state} = await dbg.fluxCall<{store: string; state: unknown}>(args.app, 'getStoreState', {store: args.store});
+        return {store: args.store, ...(args.path ? {path: args.path} : {}), state: args.path ? pointer(state, args.path) : state};
+      }),
+  );
+
+  server.registerTool(
+    'set_store_state',
+    {
+      title: 'Replace Flux store state',
+      description: 'Replaces the whole state of a store (listeners are notified, the UI re-renders). Take a snapshot_stores first to undo.',
+      inputSchema: {app, store: z.string(), state: z.record(z.string(), z.unknown())},
+      annotations: {readOnlyHint: false, destructiveHint: true},
+    },
+    (args) => run(() => dbg.fluxCall(args.app, 'setStoreState', {store: args.store, state: args.state})),
+  );
+
+  server.registerTool(
+    'dispatch_action',
+    {
+      title: 'Dispatch a Flux action',
+      description:
+        'Dispatches an action in the app. Returns its traceId and, after up to waitMs, the resulting store diffs and the HTTP requests it started (same traceId).',
+      inputSchema: {
+        app,
+        type: z.string(),
+        payload: z.record(z.string(), z.unknown()).optional(),
+        waitMs: z.number().int().min(0).max(30_000).optional().describe('Default 2000; 0 returns right after dispatching.'),
+      },
+      annotations: {readOnlyHint: false},
+    },
+    (args) => run(() => dbg.dispatchAction(args.app, args.type, args.payload ?? {}, args.waitMs ?? 2000)),
+  );
+
+  server.registerTool(
+    'snapshot_stores',
+    {
+      title: 'Snapshot Flux stores',
+      description: 'Saves the state of all stores (or the given ones) in the app. Use restore_stores with the snapshotId to go back.',
+      inputSchema: {app, stores: z.array(z.string()).optional()},
+      annotations: {readOnlyHint: true},
+    },
+    (args) => run(() => dbg.fluxCall(args.app, 'snapshot', args.stores ? {stores: args.stores} : {})),
+  );
+
+  server.registerTool(
+    'restore_stores',
+    {
+      title: 'Restore Flux stores',
+      description: 'Restores the stores saved by snapshot_stores. Snapshots live in the app process and are lost when it restarts.',
+      inputSchema: {app, snapshotId: z.string()},
+      annotations: {readOnlyHint: false, destructiveHint: true},
+    },
+    (args) => run(() => dbg.fluxCall(args.app, 'restore', {snapshotId: args.snapshotId})),
   );
 
   server.registerTool(

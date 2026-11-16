@@ -321,7 +321,7 @@ describe('view hierarchy', () => {
 
     const tree = await h.call('get_view_hierarchy', {maxDepth: 1});
 
-    expect(tree.root.children).toEqual([expect.objectContaining({id: 2, more: 3})]);
+    expect(tree.root.children).toEqual([expect.objectContaining({id: 2, more: 4})]);
   });
 
   it('returns matching nodes with their path when filtering', async () => {
@@ -479,6 +479,16 @@ describe('wait_for', () => {
     const result = await waiting;
 
     expect(result).toMatchObject({matched: true, event: {type: 'LOGIN_REQUESTED', traceId: 'trace-1', stores: ['SessionStore']}});
+  });
+
+  it('waits until a matching view shows up in a new frame', async () => {
+    h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'metadataUpdate', fx.uiMetadata);
+    const waiting = h.call('wait_for', {condition: {type: 'view_match', filter: 'Ingresar'}, timeoutMs: 2000});
+    setTimeout(() => h.fake.pushFromApp(fx.APP_ID, 'ui-debugger', 'subtreeUpdate', fx.subtreeUpdate), 150);
+
+    const result = await waiting;
+
+    expect(result).toMatchObject({matched: true, event: {resId: 'login_button', text: 'Ingresar'}});
   });
 
   it('waits for a specific request to complete', async () => {

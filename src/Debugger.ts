@@ -4,7 +4,7 @@ import type {Config} from './config.js';
 import {FlipperBridge, PluginCallError, type ClientState} from './flipper/FlipperBridge.js';
 import {FlipperConnection} from './flipper/FlipperConnection.js';
 import type {Recorder} from './flipper/Recorder.js';
-import {FLUX_PLUGIN, FluxStore, renderAction} from './stores/FluxStore.js';
+import {FLUX_PLUGIN, FluxStore, renderAction, type FluxAction} from './stores/FluxStore.js';
 import {LogStore} from './stores/LogStore.js';
 import {NetworkStore, summarize} from './stores/NetworkStore.js';
 import {PrefsStore} from './stores/PrefsStore.js';
@@ -25,7 +25,8 @@ export type WaitCondition =
   | {type: 'network_idle'; idleMs?: number; url?: string}
   | {type: 'network_request'; url: string; method?: string}
   | {type: 'log_match'; regex: string; tag?: string}
-  | {type: 'flux_action'; actionType: string};
+  | {type: 'flux_action'; actionType: string}
+  | {type: 'view_match'; filter: string};
 
 export interface WaitResult {
   matched: boolean;
@@ -65,6 +66,7 @@ export class Debugger {
     });
     // A new app session restarts the ui-debugger counters; drop the old screen.
     this.bridge.on('client-connected', (client) => this.ui.forget(client.id));
+    this.bridge.on('client-disconnected', (client) => this.network.forgetPartials(client.id));
     this.bridge.on('device-log', ({serial, entry}) => this.logs.add(serial, entry));
     this.bridge.on('device-crash', ({serial, crash}) => this.logs.addCrash(serial, crash));
   }
@@ -211,6 +213,66 @@ export class Debugger {
     return result;
   }
 
+  private requireFluxPlugin(client: ClientState): void {
+    if (client.ready && !client.plugins.includes(FLUX_PLUGIN)) {
+      throw new ActionableError(
+        `The app does not expose the '${FLUX_PLUGIN}' plugin. Add FluxDispatcherFlipperPlugin from android/flux-flipper to the debug build (see README).`,
+        {plugins: client.plugins},
+      );
+    }
+  }
+
+  async fluxCall<T>(app: string | undefined, method: string, params: Record<string, unknown> = {}): Promise<T> {
+    const client = this.resolveClient(app);
+    this.requireFluxPlugin(client);
+    return this.callPlugin<T>(client.id, FLUX_PLUGIN, method, params);
+  }
+
+  /**
+   * Dispatches an action on the app and, unless waitMs is 0, waits for the
+   * resulting `action` message (same traceId) to report its store diffs and
+   * the HTTP requests it started.
+   */
+  async dispatchAction(app: string | undefined, type: string, payload: unknown, waitMs: number) {
+    const client = this.resolveClient(app);
+    this.requireFluxPlugin(client);
+    const pending = waitMs > 0 ? this.nextFluxAction(client.id, type, waitMs) : undefined;
+    const {traceId} = await this.callPlugin<{traceId: string}>(client.id, FLUX_PLUGIN, 'dispatchAction', {type, payload});
+    if (!pending) return {traceId};
+    const matching = (a: FluxAction) => a.traceId === traceId && a.type === type;
+    const action = this.flux.buffer.findLast(matching) ?? (await pending.wait(matching));
+    pending.cancel();
+    // Requests started by the action reach Flipper a moment after the action itself.
+    if (action) await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 300)));
+    return {
+      traceId,
+      action: action ? renderAction(action, true, true) : undefined,
+      requests: this.network.query({traceId, clientId: client.id, limit: 20}).items,
+      ...(action ? {} : {hint: `No '${type}' action with traceId ${traceId} arrived within ${waitMs} ms.`}),
+    };
+  }
+
+  private nextFluxAction(clientId: string, type: string, timeoutMs: number) {
+    const seen: FluxAction[] = [];
+    const onAction = (a: FluxAction) => {
+      if (a.clientId === clientId && a.type === type) seen.push(a);
+    };
+    this.flux.on('action', onAction);
+    const cancel = () => this.flux.off('action', onAction);
+    const wait = (match: (a: FluxAction) => boolean) =>
+      new Promise<FluxAction | undefined>((resolve) => {
+        const started = Date.now();
+        const poll = setInterval(() => {
+          const found = seen.find(match);
+          if (found || Date.now() - started >= timeoutMs) {
+            clearInterval(poll);
+            resolve(found);
+          }
+        }, 20);
+      });
+    return {wait, cancel};
+  }
+
   async waitFor(condition: WaitCondition, timeoutMs: number, app?: string): Promise<WaitResult> {
     const client = this.optionalClient(app);
     const clientId = client?.id;
@@ -273,6 +335,21 @@ export class Debugger {
           };
           this.network.on('change', onChange);
           cleanups.push(() => this.network.off('change', onChange));
+          break;
+        }
+        case 'view_match': {
+          // ui-debugger pushes frames a few hundred ms after a change; poll the latest one.
+          const poll = setInterval(() => {
+            if (!clientId) return;
+            let found: {nodes?: unknown[]} | undefined;
+            try {
+              found = this.ui.hierarchy(clientId, {filter: condition.filter, maxNodes: 5}) as typeof found;
+            } catch {
+              found = undefined; // frame without a root yet
+            }
+            if (found?.nodes?.length) finish({matched: true, waitedMs: elapsed(), event: found.nodes[0]});
+          }, 100);
+          cleanups.push(() => clearInterval(poll));
           break;
         }
         case 'network_idle': {
